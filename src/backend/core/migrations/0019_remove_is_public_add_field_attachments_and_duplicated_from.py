@@ -3,8 +3,11 @@ import re
 
 import core.models
 import django.contrib.postgres.fields
+from django.core.files.storage import default_storage
 import django.db.models.deletion
 from django.db import migrations, models
+
+from botocore.exceptions import ClientError
 
 from core.utils import extract_attachments
 
@@ -14,14 +17,22 @@ def populate_attachments_on_all_documents(apps, schema_editor):
     Document = apps.get_model("core", "Document")
 
     for document in  Document.objects.all():
-        document.attachments = extract_attachments(document.content)
-        document.save(update_fields=['attachments'])
+        try:
+            response = default_storage.connection.meta.client.get_object(
+                Bucket=default_storage.bucket_name, Key=f"{document.pk!s}/file"
+            )
+        except (FileNotFoundError, ClientError):
+            pass
+        else:
+            content = response["Body"].read().decode("utf-8")
+            document.attachments = extract_attachments(content)
+            document.save(update_fields=['attachments'])
 
 
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('core', '0017_add_fields_for_soft_delete'),
+        ('core', '0018_update_blank_title'),
     ]
 
     operations = [
@@ -51,5 +62,5 @@ class Migration(migrations.Migration):
             name='language',
             field=models.CharField(choices="(('en-us', 'English'), ('fr-fr', 'French'), ('de-de', 'German'))", default='en-us', help_text='The language in which the user wants to see the interface.', max_length=10, verbose_name='language'),
         ),
-        migrations.RunPython(populate_attachments_on_all_documents),
+        migrations.RunPython(populate_attachments_on_all_documents, reverse_code=migrations.RunPython.noop),
     ]

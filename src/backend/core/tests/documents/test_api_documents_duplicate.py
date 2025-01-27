@@ -182,7 +182,9 @@ def test_api_documents_duplicate_with_accesses():
 
     # Duplicate the document via the API endpoint requesting to duplicate accesses
     response = client.post(
-        f"/api/v1.0/documents/{document.id!s}/duplicate/?with_accesses=true"
+        f"/api/v1.0/documents/{document.id!s}/duplicate/",
+        {"with_accesses": True},
+        format="json",
     )
 
     assert response.status_code == 201
