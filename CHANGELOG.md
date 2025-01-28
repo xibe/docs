@@ -10,6 +10,7 @@ and this project adheres to
 
 ## Added
 
+- ✨(oidc) add refresh token tools #584
 - 💄(frontend) add error pages #643
 - 🔒️ Manage unsafe attachments #663
 - ✨(frontend) Custom block quote with export #646
