@@ -11,6 +11,7 @@ and this project adheres to
 
 ## Fixed
 
+- 🐛(backend) stop returning inactive users on the list endpoint #635
 - 🔒️(backend) require at least 5 characters to search for users #635
 
 ## [2.2.0] - 2025-02-10
