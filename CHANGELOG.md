@@ -12,6 +12,7 @@ and this project adheres to
 
 - 🧑‍💻(frontend) change literal section open source #702
 - ♻️(frontend) replace cors proxy for export #695
+- 🚸(frontend) ctrl+k modal not when editor is focused #712
 
 ## Fixed
 
