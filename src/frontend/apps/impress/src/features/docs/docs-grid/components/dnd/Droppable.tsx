@@ -30,6 +30,7 @@ export const Droppable = (props: DroppableProps) => {
   return (
     <Box
       ref={setNodeRef}
+      data-testid={`droppable-doc-${props.id}`}
       $css={css`
         border-radius: 4px;
         background-color: ${enableHover

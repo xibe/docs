@@ -130,7 +130,7 @@ export const DocSubPageItem = ({ doc, setSelectedNode, ...props }: Props) => {
               `}
             >
               <Text $css={ItemTextCss} $size="sm">
-                {doc.title}
+                {doc.title} - {doc.id}
               </Text>
               {doc.nb_accesses_direct > 1 && (
                 <Icon isFilled iconName="group" $size="16px" $variation="400" />

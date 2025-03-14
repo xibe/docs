@@ -31,9 +31,10 @@ export const DocTree = ({ initialTargetId }: DocTreeProps) => {
   });
 
   const handleMove = (result: TreeViewMoveResult) => {
+    console.log('handleMove', result);
     moveDoc({
       sourceDocumentId: result.sourceId,
-      targetDocumentId: result.newParentId ?? result.targetModeId,
+      targetDocumentId: result.targetModeId,
       position: result.mode,
     });
     treeData?.tree.handleMove(result);

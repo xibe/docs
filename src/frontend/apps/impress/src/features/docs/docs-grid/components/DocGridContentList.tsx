@@ -151,6 +151,7 @@ export const DocGridContentList = ({ docs }: DocGridContentListProps) => {
           $padding={{ horizontal: 'xs', vertical: '3xs' }}
           $radius="12px"
           $background={overlayBgColor}
+          data-testid="drag-doc-overlay"
           $height="auto"
         >
           <Text $size="xs" $variation="000" $weight="500">
