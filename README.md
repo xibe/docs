@@ -49,7 +49,7 @@ Docs is a collaborative text editor designed to address common challenges in kno
 
 ### Test Docs!
 
-You can test Docs right now in your browser by logging in on [this test environment](https://impress-preprod.beta.numerique.gouv.fr/) using the following credentials:
+Test Docs on your browser by logging in on this [environment](https://impress-preprod.beta.numerique.gouv.fr/)
 
 ```
 email: test.docs@yopmail.com
