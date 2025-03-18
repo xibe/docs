@@ -13,11 +13,13 @@ and this project adheres to
 - ✨(frontend) add pinning on doc detail #711
 - 🚩(frontend) feature flag analytic on copy as html #649
 - ✨(frontend) Custom block divider with export #698
+- 🌐(i18n) activate dutch language #742
 
 ## Changed
 
 - 🧑‍💻(frontend) change literal section open source #702
 - ♻️(frontend) replace cors proxy for export #695
+- 🚨(gitlint) Allow uppercase in commit messages #756
 
 ## Fixed
 
