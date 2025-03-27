@@ -13,6 +13,7 @@ from logging import getLogger
 from django.conf import settings
 from django.contrib.auth import models as auth_models
 from django.contrib.auth.base_user import AbstractBaseUser
+from django.contrib.postgres.fields import ArrayField
 from django.contrib.sites.models import Site
 from django.core import mail, validators
 from django.core.cache import cache
@@ -23,7 +24,7 @@ from django.db import models, transaction
 from django.db.models.functions import Left, Length
 from django.template.loader import render_to_string
 from django.utils import timezone
-from django.utils.functional import cached_property, lazy
+from django.utils.functional import cached_property
 from django.utils.translation import get_language, override
 from django.utils.translation import gettext_lazy as _
 
@@ -96,7 +97,7 @@ class LinkReachChoices(models.TextChoices):
         """
         # If no ancestors, return all options
         if not ancestors_links:
-            return {reach: LinkRoleChoices.values for reach in cls.values}
+            return dict.fromkeys(cls.values, LinkRoleChoices.values)
 
         # Initialize result with all possible reaches and role options as sets
         result = {reach: set(LinkRoleChoices.values) for reach in cls.values}
@@ -243,7 +244,7 @@ class User(AbstractBaseUser, BaseModel, auth_models.PermissionsMixin):
 
     language = models.CharField(
         max_length=10,
-        choices=lazy(lambda: settings.LANGUAGES, tuple)(),
+        choices=settings.LANGUAGES,
         default=None,
         verbose_name=_("language"),
         help_text=_("The language in which the user wants to see the interface."),
@@ -363,10 +364,9 @@ class BaseAccess(BaseModel):
     class Meta:
         abstract = True
 
-    def _get_abilities(self, resource, user):
+    def _get_roles(self, resource, user):
         """
-        Compute and return abilities for a given user taking into account
-        the current state of the object.
+        Get the roles a user has on a resource.
         """
         roles = []
         if user.is_authenticated:
@@ -380,6 +380,15 @@ class BaseAccess(BaseModel):
                     ).values_list("role", flat=True)
                 except (self._meta.model.DoesNotExist, IndexError):
                     roles = []
+
+        return roles
+
+    def _get_abilities(self, resource, user):
+        """
+        Compute and return abilities for a given user taking into account
+        the current state of the object.
+        """
+        roles = self._get_roles(resource, user)
 
         is_owner_or_admin = bool(
             set(roles).intersection({RoleChoices.OWNER, RoleChoices.ADMIN})
@@ -427,10 +436,12 @@ class DocumentQuerySet(MP_NodeQuerySet):
 
     def readable_per_se(self, user):
         """
-        Filters the queryset to return documents that the given user has
-        permission to read.
+        Filters the queryset to return documents on which the given user has
+        direct access, team access or link access. This will not return all the
+        documents that a user can read because it can be obtained via an ancestor.
         :param user: The user for whom readable documents are to be fetched.
-        :return: A queryset of documents readable by the user.
+        :return: A queryset of documents for which the user has direct access,
+            team access or link access.
         """
         if user.is_authenticated:
             return self.filter(
@@ -442,26 +453,15 @@ class DocumentQuerySet(MP_NodeQuerySet):
         return self.filter(link_reach=LinkReachChoices.PUBLIC)
 
 
-class DocumentManager(MP_NodeManager):
+class DocumentManager(MP_NodeManager.from_queryset(DocumentQuerySet)):
     """
     Custom manager for the Document model, enabling the use of the custom
     queryset methods directly from the model manager.
     """
 
     def get_queryset(self):
-        """
-        Overrides the default get_queryset method to return a custom queryset.
-        :return: An instance of DocumentQuerySet.
-        """
-        return DocumentQuerySet(self.model, using=self._db)
-
-    def readable_per_se(self, user):
-        """
-        Filters documents based on user permissions using the custom queryset.
-        :param user: The user for whom readable documents are to be fetched.
-        :return: A queryset of documents readable by the user.
-        """
-        return self.get_queryset().readable_per_se(user)
+        """Sets the custom queryset as the default."""
+        return self._queryset_class(self.model).order_by("path")
 
 
 class Document(MP_Node, BaseModel):
@@ -486,6 +486,21 @@ class Document(MP_Node, BaseModel):
     )
     deleted_at = models.DateTimeField(null=True, blank=True)
     ancestors_deleted_at = models.DateTimeField(null=True, blank=True)
+    duplicated_from = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="duplicates",
+        editable=False,
+        blank=True,
+        null=True,
+    )
+    attachments = ArrayField(
+        models.CharField(max_length=255),
+        default=list,
+        editable=False,
+        blank=True,
+        null=True,
+    )
 
     _content = None
 
@@ -582,9 +597,13 @@ class Document(MP_Node, BaseModel):
 
     def get_content_response(self, version_id=""):
         """Get the content in a specific version of the document"""
-        return default_storage.connection.meta.client.get_object(
-            Bucket=default_storage.bucket_name, Key=self.file_key, VersionId=version_id
-        )
+        params = {
+            "Bucket": default_storage.bucket_name,
+            "Key": self.file_key,
+        }
+        if version_id:
+            params["VersionId"] = version_id
+        return default_storage.connection.meta.client.get_object(**params)
 
     def get_versions_slice(self, from_version_id="", min_datetime=None, page_size=None):
         """Get document versions from object storage with pagination and starting conditions"""
@@ -730,6 +749,32 @@ class Document(MP_Node, BaseModel):
 
         return dict(links_definitions)  # Convert defaultdict back to a normal dict
 
+    def compute_ancestors_links(self, user):
+        """
+        Compute the ancestors links for the current document up to the highest readable ancestor.
+        """
+        ancestors = (
+            (self.get_ancestors() | self._meta.model.objects.filter(pk=self.pk))
+            .filter(ancestors_deleted_at__isnull=True)
+            .order_by("path")
+        )
+        highest_readable = ancestors.readable_per_se(user).only("depth").first()
+
+        if highest_readable is None:
+            return []
+
+        ancestors_links = []
+        paths_links_mapping = {}
+        for ancestor in ancestors.filter(depth__gte=highest_readable.depth):
+            ancestors_links.append(
+                {"link_reach": ancestor.link_reach, "link_role": ancestor.link_role}
+            )
+            paths_links_mapping[ancestor.path] = ancestors_links.copy()
+
+        ancestors_links = paths_links_mapping.get(self.path[: -self.steplen], [])
+
+        return ancestors_links
+
     def get_abilities(self, user, ancestors_links=None):
         """
         Compute and return abilities for a given user on the document.
@@ -737,7 +782,7 @@ class Document(MP_Node, BaseModel):
         if self.depth <= 1 or getattr(self, "is_highest_ancestor_for_user", False):
             ancestors_links = []
         elif ancestors_links is None:
-            ancestors_links = self.get_ancestors().values("link_reach", "link_role")
+            ancestors_links = self.compute_ancestors_links(user=user)
 
         roles = set(
             self.get_roles(user)
@@ -796,6 +841,7 @@ class Document(MP_Node, BaseModel):
             "cors_proxy": can_get,
             "descendants": can_get,
             "destroy": is_owner,
+            "duplicate": can_get,
             "favorite": can_get and user.is_authenticated,
             "link_configuration": is_owner_or_admin,
             "invite_owner": is_owner,
@@ -1065,7 +1111,41 @@ class DocumentAccess(BaseAccess):
         """
         Compute and return abilities for a given user on the document access.
         """
-        return self._get_abilities(self.document, user)
+        roles = self._get_roles(self.document, user)
+        is_owner_or_admin = bool(set(roles).intersection(set(PRIVILEGED_ROLES)))
+        if self.role == RoleChoices.OWNER:
+            can_delete = (
+                RoleChoices.OWNER in roles
+                and self.document.accesses.filter(role=RoleChoices.OWNER).count() > 1
+            )
+            set_role_to = (
+                [RoleChoices.ADMIN, RoleChoices.EDITOR, RoleChoices.READER]
+                if can_delete
+                else []
+            )
+        else:
+            can_delete = is_owner_or_admin
+            set_role_to = []
+            if RoleChoices.OWNER in roles:
+                set_role_to.append(RoleChoices.OWNER)
+            if is_owner_or_admin:
+                set_role_to.extend(
+                    [RoleChoices.ADMIN, RoleChoices.EDITOR, RoleChoices.READER]
+                )
+
+        # Remove the current role as we don't want to propose it as an option
+        try:
+            set_role_to.remove(self.role)
+        except ValueError:
+            pass
+
+        return {
+            "destroy": can_delete,
+            "update": bool(set_role_to) and is_owner_or_admin,
+            "partial_update": bool(set_role_to) and is_owner_or_admin,
+            "retrieve": self.user and self.user.id == user.id or is_owner_or_admin,
+            "set_role_to": set_role_to,
+        }
 
 
 class Template(BaseModel):
